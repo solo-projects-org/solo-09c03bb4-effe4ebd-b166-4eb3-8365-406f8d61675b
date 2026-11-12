@@ -2,7 +2,8 @@ FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PUMP_DB_PATH=/data/pump_tests.db
+    PUMP_DB_PATH=/data/pump_tests.db \
+    PUMP_BACKUP_DIR=/data/backups
 
 WORKDIR /app
 
@@ -12,7 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 appuser \
-    && mkdir -p /data \
+    && mkdir -p /data/backups \
     && chown -R appuser:appuser /data /app
 USER appuser
 

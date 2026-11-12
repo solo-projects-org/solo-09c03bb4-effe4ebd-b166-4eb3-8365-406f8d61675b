@@ -61,3 +61,15 @@ class ImportResponse(TestOut):
     block_counts: dict[str, int] = Field(
         ..., description="每个摘要层级生成的块数"
     )
+
+
+class MigrateResponse(ImportResponse):
+    source_test_id: int = Field(
+        ..., description="源备份中的试验编号；响应中的 id 为中心库新分配的编号"
+    )
+
+
+class BackupResponse(BaseModel):
+    path: str = Field(..., description="服务端生成的单文件备份路径")
+    test_count: int = Field(..., description="备份中包含的试验场数")
+    size_bytes: int = Field(..., description="备份文件大小")

@@ -6,3 +6,6 @@ data/
 *.db-wal
 *.db-shm
 .venv/
+
+# 演示用的源库备份属于交付物，需要随仓库提交
+!sample_data/legacy_backup.db

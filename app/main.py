@@ -1,19 +1,28 @@
-"""FastAPI 入口：试验导入、列表、分桶查询。
+"""FastAPI 入口：试验导入、备份迁入、列表、分桶查询。
 
-启动后访问 /docs 即可在 Swagger UI 上传样例 CSV 并调整桶宽查询。
+启动后访问 /docs 即可在 Swagger UI 上传样例 CSV 或 SQLite 备份并调整桶宽查询。
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from sqlite3 import Connection
 
-from . import config
-from .db import init_db, session
+from . import __version__, config
+from .db import backup_to, init_db, session
 from .ingest import CsvValidationError, import_test
-from .schemas import ImportResponse, QueryResponse, TestOut
+from .migration import MigrationError, migrate_from_backup
+from .schemas import (
+    BackupResponse,
+    ImportResponse,
+    MigrateResponse,
+    QueryResponse,
+    TestOut,
+)
 from .service import bucket_query
 
 
@@ -29,8 +38,9 @@ app = FastAPI(
         "导入记录仪单次试验 CSV（毫秒时间戳、kPa 压力），"
         "在 SQLite 中保存原始采样与多级摘要；按起止时刻与桶宽分桶，"
         "返回每桶首/尾/最高/最低点，空桶标记为缺测。"
+        "另支持从同版服务的 SQLite 单文件备份迁入单场试验（编号重新分配）。"
     ),
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -70,6 +80,77 @@ def upload_test(
     except CsvValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     return result
+
+
+@app.post(
+    "/tests/backup",
+    response_model=BackupResponse,
+    status_code=201,
+    tags=["试验迁入"],
+    summary="导出一份可迁入 / 归档的 SQLite 单文件备份",
+)
+def create_backup(conn: Connection = Depends(get_conn)):
+    """用 SQLite 在线备份 API 生成一致的单个 .db 文件（不含 -wal/-shm）。
+
+    该文件可直接作为 `POST /tests/migrate` 的 `file` 使用；
+    回包中的 `path` 为容器内路径，位于 `PUMP_BACKUP_DIR`（默认 `/data/backups`）。
+    """
+    config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    dest = config.BACKUP_DIR / f"pump_backup_{stamp}.db"
+    if dest.exists():
+        raise HTTPException(status_code=409, detail="同名备份已存在，请稍后重试")
+    try:
+        backup_to(config.DB_PATH, dest)
+    except Exception as exc:  # 磁盘满、目录不可写等
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"生成备份失败：{exc}") from None
+    test_count = conn.execute("SELECT COUNT(*) FROM tests").fetchone()[0]
+    return {
+        "path": str(dest),
+        "test_count": test_count,
+        "size_bytes": Path(dest).stat().st_size,
+    }
+
+
+@app.post(
+    "/tests/migrate",
+    response_model=MigrateResponse,
+    status_code=201,
+    tags=["试验迁入"],
+    summary="从同版服务的 SQLite 备份迁入单场试验",
+    response_description="迁入成功，返回中心库新分配的试验编号",
+)
+def migrate_test(
+    file: UploadFile = File(
+        ...,
+        description="源服务导出的 SQLite 单文件备份（.db）",
+    ),
+    source_test_id: int = Form(
+        ...,
+        ge=1,
+        description="备份中的源试验编号（对应备份库 tests.id）",
+    ),
+    conn: Connection = Depends(get_conn),
+):
+    """只复制该场试验的元信息、原始采样与各级摘要，不重算摘要。
+
+    - 中心库重新分配试验编号；即使两库编号 / 采样行号重叠，
+      按新编号查询的分桶结果、`blocks_by_level`、`raw_rows_read` 与源库一致。
+    - 源试验不存在 → 404；摘要引用的首尾采样对不上 → 422；
+      中心库已有同名试验 → 409；备份不可读 → 400。
+    - 迁入在单事务内完成，失败时中心库保持原样。
+    """
+    content = file.file.read(config.MAX_BACKUP_BYTES + 1)
+    if len(content) > config.MAX_BACKUP_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"备份超过 {config.MAX_BACKUP_BYTES} 字节上限",
+        )
+    try:
+        return migrate_from_backup(conn, content, source_test_id)
+    except MigrationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
 
 
 @app.get("/tests", response_model=list[TestOut], tags=["试验查询"], summary="列出全部试验")

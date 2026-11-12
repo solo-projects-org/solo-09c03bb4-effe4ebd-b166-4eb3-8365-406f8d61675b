@@ -12,6 +12,14 @@ BLOCK_SIZE = int(os.getenv("PUMP_BLOCK_SIZE", "128"))
 # 单次上传 CSV 的最大字节数，避免误传超大文件打满内存
 MAX_UPLOAD_BYTES = int(os.getenv("PUMP_MAX_UPLOAD_BYTES", str(200 * 1024 * 1024)))
 
+# 单次上传 SQLite 备份（试验迁入）的最大字节数
+MAX_BACKUP_BYTES = int(os.getenv("PUMP_MAX_BACKUP_BYTES", str(200 * 1024 * 1024)))
+
+# 服务端生成单文件备份的落盘目录（默认与主库同卷）
+BACKUP_DIR = Path(
+    os.getenv("PUMP_BACKUP_DIR", str(DB_PATH.parent / "backups"))
+)
+
 # 一次分桶查询允许的最大桶数，防止桶宽过小导致结果爆炸
 MAX_BUCKETS = int(os.getenv("PUMP_MAX_BUCKETS", "100000"))
 

@@ -8,6 +8,7 @@ services:
     environment:
       PUMP_DB_PATH: /data/pump_tests.db
       PUMP_BLOCK_SIZE: "128"
+      PUMP_BACKUP_DIR: /data/backups
     volumes:
       - pump-data:/data
     restart: unless-stopped

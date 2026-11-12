@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from . import config
@@ -88,10 +89,29 @@ def session() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
-def init_db() -> None:
-    """进程启动时调用，幂等建库建表。"""
-    config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = connect()
+def backup_to(src_path, dest_path) -> None:
+    """生成一份一致的 SQLite 单文件快照（内置 backup API，含 WAL 中未落盘内容）。
+
+    中心库以 WAL 运行，直接拷主文件可能丢掉尚未 checkpoint 的尾部事务；
+    这里用 SQLite 在线备份 API 写出自包含的单文件，供迁入 / 归档使用。
+    """
+    src = connect(src_path)
+    conn = sqlite3.connect(str(dest_path))
+    try:
+        src.backup(conn)
+        conn.commit()
+        # 快照只保留单文件，不产生 -wal/-shm 伴生文件。
+        conn.execute("PRAGMA journal_mode = DELETE")
+    finally:
+        conn.close()
+        src.close()
+
+
+def init_db(db_path=None) -> None:
+    """进程启动时调用，幂等建库建表；可指定路径（测试 / 生成样例备份用）。"""
+    path = Path(db_path) if db_path is not None else config.DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(path)
     try:
         conn.executescript(_SCHEMA)
         conn.commit()

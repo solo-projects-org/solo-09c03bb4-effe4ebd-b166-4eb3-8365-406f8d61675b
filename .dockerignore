@@ -4,6 +4,6 @@ data/
 .git/
 tests/
 .pytest_cache/
-*.db
 *.db-wal
 *.db-shm
+.venv/
